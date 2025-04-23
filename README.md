@@ -1,2 +1,2 @@
 # CPU-SIMSIM
-![데모 GIF](assets/demo.gif)
+![demo](https://github.com/passingduck/CPU-SIMSIM/blob/main/assets/cpu-simsim.gif)
