@@ -54,5 +54,5 @@ class ControlPanel(QWidget):
 
     def reset(self):
         self.cpu.reset()
-        self.mem_view.model().layoutChanged.emit()
+        self.mem_view.refresh()
         self.status.setText("Reset OK")

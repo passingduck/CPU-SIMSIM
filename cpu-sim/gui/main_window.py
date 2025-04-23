@@ -31,7 +31,7 @@ class MainWindow(QMainWindow):
 def run():
     app = QApplication(sys.argv)
     mw = MainWindow()
-    mw.resize(900, 600)
+    mw.resize(1280, 960)
     mw.show()
     sys.exit(app.exec())
 

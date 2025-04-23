@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import List
 
-GENERAL_REGS = 8          # R0–R7
+GENERAL_REGS = 16         # R0–R15
 SPECIAL_REGS = ["PC", "IR", "CPSR", "LR"]  # LR=return reg
 
 
