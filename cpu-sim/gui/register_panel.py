@@ -58,7 +58,6 @@ class RegisterPanel(QWidget):
         self.edits[special_start].setText(f"{self.cpu.reg.pc:04X}")
         self.edits[special_start+1].setText(f"{self.cpu.reg.ir:04X}")
         self.edits[special_start+2].setText(f"{self.cpu.reg.cpsr:04X}")
-        self.edits[special_start+3].setText(f"{self.cpu.reg.lr:04X}")
         self.updating = False
     
     @Slot()

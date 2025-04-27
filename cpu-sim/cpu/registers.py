@@ -1,8 +1,8 @@
 from dataclasses import dataclass, field
 from typing import List
 
-GENERAL_REGS = 16         # R0–R15
-SPECIAL_REGS = ["PC", "IR", "CPSR", "LR"]  # LR=return reg
+GENERAL_REGS = 8
+SPECIAL_REGS = ["PC", "IR", "CPSR"]
 
 
 @dataclass
@@ -11,7 +11,6 @@ class Registers:
     pc: int = 0
     ir: int = 0
     cpsr: int = 0
-    lr: int = 0
 
     def __getitem__(self, idx: int) -> int:
         if 0 <= idx < GENERAL_REGS:

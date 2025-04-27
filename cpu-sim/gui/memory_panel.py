@@ -82,25 +82,22 @@ class MemoryPanel(QWidget):
         asm_layout = QVBoxLayout()
         
         # Assembly instructions help
-        help_text = """
-        Supported instructions (16-bit format):
-        - AND Rd, Rs1   (0xdrs)  - Bitwise AND of Rd and Rs1, result in Rd
-        - OR Rd, Rs1    (0x1rs)  - Bitwise OR of Rd and Rs1, result in Rd
-        - ADD Rd, Rs1   (0x2rs)  - Add Rd and Rs1, result in Rd
-        - MUL Rd, Rs1   (0x3rs)  - Multiply Rd and Rs1, result in Rd
-        - DIV Rd, Rs1   (0x4rs)  - Divide Rd by Rs1, result in Rd
-        - LDI Rd, #imm  (0x5ri)  - Load immediate value to Rd
-        - LDM Rd, [Rs1] (0x6rs)  - Load from memory address in Rs1 to Rd
-        - STM Rd, [Rs1] (0x7rs)  - Store Rd to memory address in Rs1
-        - MV [Rd]       (0x8rs)  - Move value in Rd to PC (jump)
-        - CMP Rd        (0x9rs)  - Compare Rd with 0, set Z flag if equal
-        - JZ [Rd]       (0xArs)  - Jump to address in Rd if Z flag is set
-        
-        Rd, Rs1 can be R0-R15 (4 bits each)
-        For LDI, immediate can be 0-255 (8 bits) using Rs1 and Rs2 fields
-        If immediate is 0, the next word in memory is used as the full immediate
-        Z flag is the rightmost bit of CPSR register
-        """
+        help_text = (
+            "Minimal LC-3 assembler (one word per line)\n"
+            "--------------------------------------------------\n"
+            "• ADD  DR, SR1, SR2            ; 레지스터-레지스터\n"
+            "• ADD  DR, SR1, #imm5          ; 즉시값(-16…+15)\n"
+            "• AND  …                       ; 형식 동일\n"
+            "• NOT  DR, SR                  ; 비트 반전\n"
+            "• BR[n][z][p] LABEL / #off9    ; PC-상대 분기\n"
+            "• JMP  BaseR     |  RET        ; 점프 / 서브루틴 복귀\n"
+            "• JSR  LABEL/#off11 | JSRR BaseR\n"
+            "• LD / LDI / ST / STI  DR|SR, #off9\n"
+            "• LDR / STR  DR|SR, BaseR, #off6\n"
+            "• LEA  DR, #off9               ; 주소 계산\n"
+            "• TRAP x23 / x25 …            ; 시스템 호출\n"
+            "※ LABEL 은 아직 지원하지 않으며, #offset 숫자(10진/16진 0x…)만 가능\n"
+        )
         help_label = QLabel(help_text)
         asm_layout.addWidget(help_label)
         
@@ -207,113 +204,117 @@ class MemoryPanel(QWidget):
             QMessageBox.information(self, "Assembly Complete", 
                                    f"Code assembled and loaded starting at address {self.start_address:02X}")
     
-    def assemble_instruction(self, line):
-        """Convert a single assembly instruction to machine code bytes"""
-        # Remove comments
+    def assemble_instruction(self, line: str):
+        """
+        단일 LC-3 어셈블리 라인을 16-bit 워드 리스트로 변환.
+        ▸ 라벨 파서는 생략하고, #imm / #off 숫자만 허용.
+        ▸ 모든 숫자는 10진 또는 0xHEX 인식.
+        ▸ 잘못된 형식이면 ValueError 발생.
+        """
+        # 코멘트 제거
         line = re.sub(r';.*$', '', line).strip()
-        
-        # Match instruction patterns
-        # ALU operations: AND, OR, ADD, MUL, DIV
-        alu_match = re.match(r'(AND|OR|ADD|MUL|DIV)\s+R(\d+),\s*R(\d+)', line, re.IGNORECASE)
-        if alu_match:
-            op_name, rd, rs1 = alu_match.groups()
-            op_map = {'AND': 0x0, 'OR': 0x1, 'ADD': 0x2, 'MUL': 0x3, 'DIV': 0x4}
-            op = op_map[op_name.upper()]
-            rd = int(rd)
-            rs1 = int(rs1)
-            
-            # Check register range
-            if not (0 <= rd < 16 and 0 <= rs1 < 16):
-                raise ValueError(f"Register out of range (must be R0-R15): {line}")
-                
-            # 16-bit instruction format: opcode(4) | rd(4) | rs1(4) | rs2/imm(4)
-            instr = (op << 12) | (rd << 8) | (rs1 << 4) | 0  # rs2 is unused for ALU ops
+        if not line:
+            raise ValueError("empty")
+
+        # 공통 유틸
+        def num(tok, bits, signed=True):
+            """토큰 → int, 범위 검사(+sign extend를 기계가 하므로 여기선 값만 확인)"""
+            base = 16 if tok.lower().startswith('0x') else 10
+            v = int(tok, base)
+            lo = -(1 << (bits-1)) if signed else 0
+            hi =  (1 << (bits-1)) - 1 if signed else (1 << bits) - 1
+            if not lo <= v <= hi:
+                raise ValueError(f"immediate {tok} out of range for {bits}-bit field")
+            return v & ((1 << bits) - 1)
+
+        # -------- ADD / AND (두 형식) ---------------------------------
+        m = re.match(r'(ADD|AND)\s+R(\d),\s*R(\d),\s*(R(\d)|#(-?\w+))$', line, re.I)
+        if m:
+            op, dr, sr1, last, sr2, imm = m.groups()
+            opcode = 0x1 if op.upper() == 'ADD' else 0x5
+            dr = int(dr); sr1 = int(sr1)
+            if sr2:                          # 레지스터 형식
+                sr2 = int(sr2)
+                instr = (opcode << 12) | (dr << 9) | (sr1 << 6) | sr2
+            else:                            # 즉시 형식
+                imm5 = num(imm, 5)
+                instr = (opcode << 12) | (dr << 9) | (sr1 << 6) | (1 << 5) | imm5
             return [instr]
-        
-        # Load immediate: LDI Rd, #imm
-        ldi_match = re.match(r'LDI\s+R(\d+),\s*#(\d+)', line, re.IGNORECASE)
-        if ldi_match:
-            rd, imm = ldi_match.groups()
-            rd = int(rd)
-            imm = int(imm)
-            
-            # Check register range
-            if not (0 <= rd < 16):
-                raise ValueError(f"Register out of range (must be R0-R15): {line}")
-            
-            if 0 <= imm <= 255:
-                # Immediate fits in 8 bits (split across rs1 and rs2 fields)
-                rs1 = (imm >> 4) & 0xF  # High 4 bits
-                rs2 = imm & 0xF         # Low 4 bits
-                instr = (0x5 << 12) | (rd << 8) | (rs1 << 4) | rs2
+
+        # -------- NOT --------------------------------------------------
+        m = re.match(r'NOT\s+R(\d),\s*R(\d)$', line, re.I)
+        if m:
+            dr, sr = map(int, m.groups())
+            instr = (0x9 << 12) | (dr << 9) | (sr << 6) | 0x3F
+            return [instr]
+
+        # -------- BR ---------------------------------------------------
+        m = re.match(r'BR([nNpPzZ]{0,3})\s+#(-?\w+)$', line)
+        if m:
+            cond, off = m.groups()
+            nzp = 0
+            nzp |= 0b100 if 'n' in cond.lower() else 0
+            nzp |= 0b010 if 'z' in cond.lower() else 0
+            nzp |= 0b001 if 'p' in cond.lower() else 0
+            if nzp == 0: nzp = 0b111                  # plain “BR”
+            off9 = num(off, 9)
+            instr = (0x0 << 12) | (nzp << 9) | off9
+            return [instr]
+
+        # -------- JMP / RET -------------------------------------------
+        if re.fullmatch(r'RET', line, re.I):
+            return [(0xC << 12) | (7 << 6)]
+        m = re.match(r'JMP\s+R(\d)$', line, re.I)
+        if m:
+            baser = int(m.group(1))
+            return [(0xC << 12) | (baser << 6)]
+
+        # -------- JSR / JSRR ------------------------------------------
+        m = re.match(r'JSRR\s+R(\d)$', line, re.I)
+        if m:
+            baser = int(m.group(1))
+            instr = (0x4 << 12) | (0 << 11) | (0 << 9) | (baser << 6)
+            return [instr]
+        m = re.match(r'JSR\s+#(-?\w+)$', line, re.I)
+        if m:
+            off11 = num(m.group(1), 11)
+            instr = (0x4 << 12) | (1 << 11) | off11
+            return [instr]
+
+        # -------- LD / LDI / ST / STI (PC-offset9) --------------------
+        for mnemonic, opc in [('LD',0x2), ('LDI',0xA), ('ST',0x3), ('STI',0xB)]:
+            m = re.match(fr'{mnemonic}\s+R?(\d),\s*#(-?\w+)$', line, re.I)
+            if m:
+                reg, off = m.groups()
+                reg = int(reg)
+                off9 = num(off, 9)
+                instr = (opc << 12) | (reg << 9) | off9
                 return [instr]
-            else:
-                # Large immediate needs an extra word
-                instr = (0x5 << 12) | (rd << 8) | 0  # Use 0 to indicate extra word
-                return [instr, imm & 0xFFFF]  # Only use the lower 16 bits
-        
-        # Load from memory: LDM Rd, [Rs1]
-        ldm_match = re.match(r'LDM\s+R(\d+),\s*\[R(\d+)\]', line, re.IGNORECASE)
-        if ldm_match:
-            rd, rs1 = ldm_match.groups()
-            rd = int(rd)
-            rs1 = int(rs1)
-            
-            # Check register range
-            if not (0 <= rd < 16 and 0 <= rs1 < 16):
-                raise ValueError(f"Register out of range (must be R0-R15): {line}")
-                
-            instr = (0x6 << 12) | (rd << 8) | (rs1 << 4) | 0  # rs2 is unused
+
+        # -------- LDR / STR (Base+off6) -------------------------------
+        for mnemonic, opc in [('LDR',0x6), ('STR',0x7)]:
+            m = re.match(fr'{mnemonic}\s+R(\d),\s*R(\d),\s*#(-?\w+)$', line, re.I)
+            if m:
+                drsr, baser, off = m.groups()
+                drsr  = int(drsr)
+                baser = int(baser)
+                off6  = num(off, 6)
+                instr = (opc << 12) | (drsr << 9) | (baser << 6) | off6
+                return [instr]
+
+        # -------- LEA --------------------------------------------------
+        m = re.match(r'LEA\s+R(\d),\s*#(-?\w+)$', line, re.I)
+        if m:
+            dr, off = m.groups()
+            dr = int(dr); off9 = num(off, 9, signed=True)
+            instr = (0xE << 12) | (dr << 9) | off9
             return [instr]
-        
-        # Store to memory: STM Rd, [Rs1]
-        stm_match = re.match(r'STM\s+R(\d+),\s*\[R(\d+)\]', line, re.IGNORECASE)
-        if stm_match:
-            rd, rs1 = stm_match.groups()
-            rd = int(rd)
-            rs1 = int(rs1)
-            
-            # Check register range
-            if not (0 <= rd < 16 and 0 <= rs1 < 16):
-                raise ValueError(f"Register out of range (must be R0-R15): {line}")
-                
-            instr = (0x7 << 12) | (rd << 8) | (rs1 << 4) | 0  # rs2 is unused
+
+        # -------- TRAP -------------------------------------------------
+        m = re.match(r'TRAP\s+x([0-9A-F]{1,2})$', line, re.I)
+        if m:
+            vect = int(m.group(1), 16) & 0xFF
+            instr = (0xF << 12) | vect
             return [instr]
-        
-        # Move to PC: MV [Rd]
-        mv_match = re.match(r'MV\s+\[R(\d+)\]', line, re.IGNORECASE)
-        if mv_match:
-            rd = int(mv_match.group(1))
-            
-            # Check register range
-            if not (0 <= rd < 16):
-                raise ValueError(f"Register out of range (must be R0-R15): {line}")
-                
-            instr = (0x8 << 12) | (rd << 8) | 0  # rs1 and rs2 are unused
-            return [instr]
-        
-        # Compare with zero: CMP Rd
-        cmp_match = re.match(r'CMP\s+R(\d+)', line, re.IGNORECASE)
-        if cmp_match:
-            rd = int(cmp_match.group(1))
-            
-            # Check register range
-            if not (0 <= rd < 16):
-                raise ValueError(f"Register out of range (must be R0-R15): {line}")
-                
-            instr = (0x9 << 12) | (rd << 8) | 0  # rs1 and rs2 are unused
-            return [instr]
-        
-        # Jump if zero: JZ [Rd]
-        jz_match = re.match(r'JZ\s+\[R(\d+)\]', line, re.IGNORECASE)
-        if jz_match:
-            rd = int(jz_match.group(1))
-            
-            # Check register range
-            if not (0 <= rd < 16):
-                raise ValueError(f"Register out of range (must be R0-R15): {line}")
-                
-            instr = (0xA << 12) | (rd << 8) | 0  # rs1 and rs2 are unused
-            return [instr]
-        
-        raise ValueError(f"Invalid instruction: {line}")
+
+        raise ValueError("syntax error or unsupported opcode")
